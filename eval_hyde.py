@@ -37,10 +37,10 @@ def compute_rr(retrieved_docs, relevant_docs):
 
 query_ids = list(queries.keys())[:NUM_EVAL_QUERIES]
 
-raw_hits, kw_hits, hyde_hits = 0, 0, 0
-raw_rr, kw_rr, hyde_rr = [], [], []
+raw_hits, kw_hits, hyde_hits, hybrid_hits = 0, 0, 0, 0
+raw_rr, kw_rr, hyde_rr, hybrid_rr = [], [], [], []
 
-print(f"\n--- Starting 3-Way Benchmark ({NUM_EVAL_QUERIES} Queries) ---")
+print(f"\n--- Starting 4-Way Benchmark ({NUM_EVAL_QUERIES} Queries) ---")
 
 for i, qid in enumerate(query_ids, 1):
     raw_query = queries[qid]
@@ -73,17 +73,24 @@ for i, qid in enumerate(query_ids, 1):
     )
     hyde_doc = ollama.chat(model=MODEL, messages=[{'role': 'user', 'content': hyde_prompt}])['message']['content'].strip()
     hyde_query = f"{raw_query} {hyde_doc}"
+    hybrid_query = f"{raw_query} {kw_res} {hyde_doc}"
 
     hyde_top_k = retrieve_top_k(hyde_query, k=K)
     if relevant_docs.intersection(set(hyde_top_k)):
         hyde_hits += 1
     hyde_rr.append(compute_rr(hyde_top_k, relevant_docs))
+    
+    hybrid_top_k = retrieve_top_k(hybrid_query, k=K)
+    if relevant_docs.intersection(set(hybrid_top_k)):
+        hybrid_hits += 1
+    hybrid_rr.append(compute_rr(hybrid_top_k, relevant_docs))
 
     print(f"[{i}/{NUM_EVAL_QUERIES}] Evaluated query: {raw_query[:45]}...")
 
 # Final Benchmark Summary
-print(f"\n{'Method':<20} | {'Success@' + str(K):<12} | {'MRR@' + str(K):<10}")
-print("-" * 50)
-print(f"{'1. Raw BM25':<20} | {raw_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(raw_rr):<10.4f}")
-print(f"{'2. Keyword Expansion':<20} | {kw_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(kw_rr):<10.4f}")
-print(f"{'3. HyDE Expansion':<20} | {hyde_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(hyde_rr):<10.4f}")
+print(f"\n{'Method':<25} | {'Success@' + str(K):<12} | {'MRR@' + str(K):<10}")
+print("-" * 55)
+print(f"{'1. Raw BM25':<25} | {raw_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(raw_rr):<10.4f}")
+print(f"{'2. Keyword Expansion':<25} | {kw_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(kw_rr):<10.4f}")
+print(f"{'3. HyDE Expansion':<25} | {hyde_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(hyde_rr):<10.4f}")
+print(f"{'4. Hybrid (KW + HyDE)':<25} | {hybrid_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(hybrid_rr):<10.4f}")

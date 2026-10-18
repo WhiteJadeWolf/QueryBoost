@@ -70,8 +70,8 @@ for i, qid in enumerate(query_ids, 1):
     relevant_docs = set(qrels[qid].keys()) # fetch the doc IDs that are relevant to this query
     
     # raw query retrieval
-    raw_top_k = set(retrieve_top_k(raw_query, k=K))
-    if relevant_docs.intersection(raw_top_k):
+    raw_top_k = retrieve_top_k(raw_query, k=K)
+    if relevant_docs.intersection(set(raw_top_k)):
         raw_hits += 1
     raw_rr_list.append(compute_rr(raw_top_k, relevant_docs))
         
@@ -85,8 +85,8 @@ for i, qid in enumerate(query_ids, 1):
     expanded_terms = response['message']['content'].strip()
     expanded_query = f"{raw_query} {expanded_terms}"
     
-    expanded_top_k = set(retrieve_top_k(expanded_query, k=K))
-    if relevant_docs.intersection(expanded_top_k):
+    expanded_top_k = retrieve_top_k(expanded_query, k=K)
+    if relevant_docs.intersection(set(expanded_top_k)):
         expanded_hits += 1
     expanded_rr_list.append(compute_rr(expanded_top_k, relevant_docs))
     

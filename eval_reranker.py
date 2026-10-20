@@ -5,14 +5,15 @@ from beir import util
 from beir.datasets.data_loader import GenericDataLoader
 from sentence_transformers import CrossEncoder
 import os
+import math
 
 MODEL = 'qwen2.5:7b'
 K = 10
 NUM_EVAL_QUERIES = 100
-DATASET = 'scifact'
+DATASETS = ["scifact", "trec-covid", "fiqa"]
+dataset = DATASETS[0] 
 
-print(f"Loading {DATASET} dataset...")
-dataset = DATASET
+print(f"Loading {dataset} dataset...")
 url = f"https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{dataset}.zip"
 out_dir = os.path.join(os.getcwd(), "datasets")
 data_path = util.download_and_unzip(url, out_dir)
@@ -41,28 +42,46 @@ def compute_rr(retrieved_docs, relevant_docs):
             return 1.0 / rank
     return 0.0
 
+def compute_ndcg(retrieved_docs, relevant_docs_with_scores, k=10):
+    dcg = 0.0
+    for i, doc_id in enumerate(retrieved_docs[:k]):
+        if doc_id in relevant_docs_with_scores:
+            rel = relevant_docs_with_scores[doc_id]
+            dcg += rel / math.log2(i + 2)
+            
+    ideal_docs = sorted(relevant_docs_with_scores.values(), reverse=True)[:k]
+    idcg = sum(rel / math.log2(i + 2) for i, rel in enumerate(ideal_docs))
+    
+    if idcg == 0:
+        return 0.0
+    return dcg / idcg
+
 query_ids = list(queries.keys())[:NUM_EVAL_QUERIES]
+ACTUAL_EVAL_QUERIES = len(query_ids)
 
 raw_hits, hybrid_hits, reranked_hits = 0, 0, 0
 raw_rr, hybrid_rr, reranked_rr = [], [], []
+raw_ndcg, hybrid_ndcg, reranked_ndcg = [], [], []
 
-print(f"\n--- Starting Reranker Benchmark ({NUM_EVAL_QUERIES} Queries) ---")
+print(f"\n--- Starting Reranker Benchmark ({ACTUAL_EVAL_QUERIES} Queries) ---")
 
 for i, qid in enumerate(query_ids, 1):
     raw_query = queries[qid]
-    relevant_docs = set(qrels[qid].keys())
+    relevant_docs_with_scores = qrels[qid]
+    relevant_docs = set(relevant_docs_with_scores.keys())
     
     # Raw BM25 (Top K)
     raw_top_k = retrieve_top_k(raw_query, k=K)
     if relevant_docs.intersection(set(raw_top_k)):
         raw_hits += 1
     raw_rr.append(compute_rr(raw_top_k, relevant_docs))
+    raw_ndcg.append(compute_ndcg(raw_top_k, relevant_docs_with_scores, k=K))
     
     # Generate LLM Expansion (Keywords + HyDE)
-    kw_prompt = f"Given the English scientific search query: '{raw_query}', generate 3 to 5 synonymous English search terms or related scientific concepts. Output ONLY a space-separated list of English words, nothing else."
+    kw_prompt = f"Given the search query: '{raw_query}', generate 3 to 5 synonymous English search terms or related concepts. Output ONLY a space-separated list of English words, nothing else."
     kw_res = ollama.chat(model=MODEL, messages=[{'role': 'user', 'content': kw_prompt}])['message']['content'].strip()
     
-    hyde_prompt = f"Write a short, factual scientific passage or abstract excerpt (2-3 sentences) in English addressing this scientific claim or query: '{raw_query}'. Do not include commentary, just the passage."
+    hyde_prompt = f"Write a short, factual passage (2-3 sentences) in English directly addressing or answering this query: '{raw_query}'. Do not include commentary, just the passage."
     hyde_doc = ollama.chat(model=MODEL, messages=[{'role': 'user', 'content': hyde_prompt}])['message']['content'].strip()
     
     hybrid_query = f"{raw_query} {kw_res} {hyde_doc}"
@@ -72,11 +91,12 @@ for i, qid in enumerate(query_ids, 1):
     if relevant_docs.intersection(set(hybrid_top_k)):
         hybrid_hits += 1
     hybrid_rr.append(compute_rr(hybrid_top_k, relevant_docs))
+    hybrid_ndcg.append(compute_ndcg(hybrid_top_k, relevant_docs_with_scores, k=K))
 
     # Hybrid BM25 (Top 100) -> Cross-Encoder Reranker (Top K)
     hybrid_top_100 = retrieve_top_k(hybrid_query, k=100)
     
-    # Format pairs for the Cross-Encoder: [[Query, Doc1], [Query, Doc2], ...]
+    # Format pairs for the Cross-Encoder : [[Query, Doc1], [Query, Doc2], ...]
     pairs = [[raw_query, doc_id_to_text[doc_id]] for doc_id in hybrid_top_100]
     scores = reranker.predict(pairs)
     
@@ -87,12 +107,13 @@ for i, qid in enumerate(query_ids, 1):
     if relevant_docs.intersection(set(reranked_top_k)):
         reranked_hits += 1
     reranked_rr.append(compute_rr(reranked_top_k, relevant_docs))
+    reranked_ndcg.append(compute_ndcg(reranked_top_k, relevant_docs_with_scores, k=K))
 
-    print(f"[{i}/{NUM_EVAL_QUERIES}] Evaluated query: {raw_query[:45]}...")
+    print(f"[{i}/{ACTUAL_EVAL_QUERIES}] Evaluated query: {raw_query[:45]}...")
 
 # Final Benchmark Summary
-print(f"\n{'Method':<35} | {'Success@' + str(K):<12} | {'MRR@' + str(K):<10}")
-print("-" * 65)
-print(f"{'1. Raw BM25 (Top {K})':<35} | {raw_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(raw_rr):<10.4f}")
-print(f"{'2. Hybrid BM25 (Top {K})':<35} | {hybrid_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(hybrid_rr):<10.4f}")
-print(f"{'3. Hybrid BM25 (Top 100) + Reranker':<35} | {reranked_hits/NUM_EVAL_QUERIES:<12.2%} | {np.mean(reranked_rr):<10.4f}")
+print(f"\n{'Method':<35} | {'Success@' + str(K):<12} | {'MRR@' + str(K):<10} | {'nDCG@' + str(K):<10}")
+print("-" * 80)
+print(f"{'1. Raw BM25 (Top ' + str(K) + ')':<35} | {raw_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(raw_rr):<10.4f} | {np.mean(raw_ndcg):<10.4f}")
+print(f"{'2. Hybrid BM25 (Top ' + str(K) + ')':<35} | {hybrid_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(hybrid_rr):<10.4f} | {np.mean(hybrid_ndcg):<10.4f}")
+print(f"{'3. Hybrid BM25 (Top 100) + Reranker':<35} | {reranked_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(reranked_rr):<10.4f} | {np.mean(reranked_ndcg):<10.4f}")

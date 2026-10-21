@@ -6,12 +6,14 @@ from beir.datasets.data_loader import GenericDataLoader
 from sentence_transformers import CrossEncoder
 import os
 import math
+import csv
 
 MODEL = 'qwen2.5:7b'
 K = 10
 NUM_EVAL_QUERIES = 100
 DATASETS = ["scifact", "trec-covid", "fiqa"]
-dataset = DATASETS[0] 
+dataset = DATASETS[0]
+CSV_FILE = 'query_exp_benchmark_results.csv'
 
 print(f"Loading {dataset} dataset...")
 url = f"https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{dataset}.zip"
@@ -117,3 +119,14 @@ print("-" * 80)
 print(f"{'1. Raw BM25 (Top ' + str(K) + ')':<35} | {raw_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(raw_rr):<10.4f} | {np.mean(raw_ndcg):<10.4f}")
 print(f"{'2. Hybrid BM25 (Top ' + str(K) + ')':<35} | {hybrid_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(hybrid_rr):<10.4f} | {np.mean(hybrid_ndcg):<10.4f}")
 print(f"{'3. Hybrid BM25 (Top 100) + Reranker':<35} | {reranked_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(reranked_rr):<10.4f} | {np.mean(reranked_ndcg):<10.4f}")
+
+# Saving Results
+file_exists = os.path.isfile(CSV_FILE)
+with open(CSV_FILE, mode='a', newline='') as file:
+    writer = csv.writer(file)
+    if not file_exists:
+        writer.writerow(["Dataset", "Method", "Success@10", "MRR@10", "nDCG@10"])
+    writer.writerow([dataset.upper(), f"Raw BM25", raw_hits/ACTUAL_EVAL_QUERIES, np.mean(raw_rr), np.mean(raw_ndcg)])
+    writer.writerow([dataset.upper(), f"Hybrid BM25", hybrid_hits/ACTUAL_EVAL_QUERIES, np.mean(hybrid_rr), np.mean(hybrid_ndcg)])
+    writer.writerow([dataset.upper(), f"Hybrid + Reranker", reranked_hits/ACTUAL_EVAL_QUERIES, np.mean(reranked_rr), np.mean(reranked_ndcg)])
+print(f"\nResults appended to {CSV_FILE}")

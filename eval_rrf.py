@@ -5,13 +5,15 @@ from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer, util as st_util
 import os
 import math
+import csv
 
 K = 10
 NUM_EVAL_QUERIES = 100
 RRF_K = 60 # Standard smoothing constant for RRF (Reciprocal Rank Fusion)
 DENSE_MODEL = 'all-MiniLM-L6-v2'
 DATASETS = ['scifact', 'trec-covid', 'fiqa']
-dataset = DATASETS[2] 
+dataset = DATASETS[2]
+CSV_FILE = 'baseline_rrf_benchmark_results.csv'
 
 print(f"Loading {dataset} dataset...")
 url = f"https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{dataset}.zip"
@@ -113,3 +115,14 @@ print("-" * 80)
 print(f"{'1. Sparse BM25 (Top ' + str(K) + ')':<35} | {sparse_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(sparse_rr):<10.4f} | {np.mean(sparse_ndcg):<10.4f}")
 print(f"{'2. Dense Vector Search (Top ' + str(K) + ')':<35} | {dense_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(dense_rr):<10.4f} | {np.mean(dense_ndcg):<10.4f}")
 print(f"{'3. Hybrid RRF (Top ' + str(K) + ')':<35} | {rrf_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(rrf_rr):<10.4f} | {np.mean(rrf_ndcg):<10.4f}")
+
+# Saving Results
+file_exists = os.path.isfile(CSV_FILE)
+with open(CSV_FILE, mode='a', newline='') as file:
+    writer = csv.writer(file)
+    if not file_exists:
+        writer.writerow(["Dataset", "Method", "Success@10", "MRR@10", "nDCG@10"])
+    writer.writerow([dataset.upper(), "Sparse BM25", sparse_hits / ACTUAL_EVAL_QUERIES, np.mean(sparse_rr), np.mean(sparse_ndcg)])
+    writer.writerow([dataset.upper(), "Dense Vector", dense_hits / ACTUAL_EVAL_QUERIES, np.mean(dense_rr), np.mean(dense_ndcg)])
+    writer.writerow([dataset.upper(), "Hybrid RRF", rrf_hits / ACTUAL_EVAL_QUERIES, np.mean(rrf_rr), np.mean(rrf_ndcg)])
+print(f"\nResults securely appended to {CSV_FILE}")

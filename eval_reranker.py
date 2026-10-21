@@ -7,6 +7,7 @@ from sentence_transformers import CrossEncoder
 import os
 import math
 import csv
+import time
 
 MODEL = 'qwen2.5:7b'
 K = 10
@@ -64,6 +65,7 @@ ACTUAL_EVAL_QUERIES = len(query_ids)
 raw_hits, hybrid_hits, reranked_hits = 0, 0, 0
 raw_rr, hybrid_rr, reranked_rr = [], [], []
 raw_ndcg, hybrid_ndcg, reranked_ndcg = [], [], []
+raw_time_total, hybrid_time_total, reranked_time_total = 0.0, 0.0, 0.0
 
 print(f"\n--- Starting Reranker Benchmark ({ACTUAL_EVAL_QUERIES} Queries) ---")
 
@@ -72,14 +74,17 @@ for i, qid in enumerate(query_ids, 1):
     relevant_docs_with_scores = qrels[qid]
     relevant_docs = set(relevant_docs_with_scores.keys())
     
-    # Raw BM25 (Top K)
+    # -- Raw BM25 (Top K) --
+    start_time = time.time()
     raw_top_k = retrieve_top_k(raw_query, k=K)
+    raw_time_total += (time.time() - start_time) # record latency
     if relevant_docs.intersection(set(raw_top_k)):
         raw_hits += 1
     raw_rr.append(compute_rr(raw_top_k, relevant_docs))
     raw_ndcg.append(compute_ndcg(raw_top_k, relevant_docs_with_scores, k=K))
     
-    # Generate LLM Expansion (Keywords + HyDE)
+    # -- Generate LLM Expansion (Keywords + HyDE) --
+    start_time = time.time()
     kw_prompt = f"Given the search query: '{raw_query}', generate 3 to 5 synonymous English search terms or related concepts. Output ONLY a space-separated list of English words, nothing else."
     kw_res = ollama.chat(model=MODEL, messages=[{'role': 'user', 'content': kw_prompt}])['message']['content'].strip()
     
@@ -88,14 +93,16 @@ for i, qid in enumerate(query_ids, 1):
     
     hybrid_query = f"{raw_query} {kw_res} {hyde_doc}"
     
-    # Hybrid BM25 (Top K)
+    # -- Hybrid BM25 (Top K) --
     hybrid_top_k = retrieve_top_k(hybrid_query, k=K)
+    hybrid_time_total += (time.time() - start_time) # record latency (LLM + Search)
     if relevant_docs.intersection(set(hybrid_top_k)):
         hybrid_hits += 1
     hybrid_rr.append(compute_rr(hybrid_top_k, relevant_docs))
     hybrid_ndcg.append(compute_ndcg(hybrid_top_k, relevant_docs_with_scores, k=K))
 
-    # Hybrid BM25 (Top 100) -> Cross-Encoder Reranker (Top K)
+    # -- Hybrid BM25 (Top 100) -> Cross-Encoder Reranker (Top K) --
+    start_time = time.time()
     hybrid_top_100 = retrieve_top_k(hybrid_query, k=100)
     
     # Format pairs for the Cross-Encoder : [[Query, Doc1], [Query, Doc2], ...]
@@ -105,6 +112,7 @@ for i, qid in enumerate(query_ids, 1):
     # Re-sort the top 100 documents based on the Cross-Encoder scores
     sorted_indices = np.argsort(scores)[::-1][:K]
     reranked_top_k = [hybrid_top_100[idx] for idx in sorted_indices]
+    reranked_time_total += (time.time() - start_time)
     
     if relevant_docs.intersection(set(reranked_top_k)):
         reranked_hits += 1
@@ -113,20 +121,25 @@ for i, qid in enumerate(query_ids, 1):
 
     print(f"[{i}/{ACTUAL_EVAL_QUERIES}] Evaluated query: {raw_query[:45]}...")
 
+# Average Latency (secs per query)
+avg_raw_time = raw_time_total / ACTUAL_EVAL_QUERIES
+avg_hybrid_time = hybrid_time_total / ACTUAL_EVAL_QUERIES
+avg_reranked_time = (hybrid_time_total + reranked_time_total) / ACTUAL_EVAL_QUERIES # total pipeline time (add the Hybrid expansion time to the reranker time because reranking depends on it)
+
 # Final Benchmark Summary
-print(f"\n{'Method':<35} | {'Success@' + str(K):<12} | {'MRR@' + str(K):<10} | {'nDCG@' + str(K):<10}")
+print(f"\n{'Method':<35} | {'Success@' + str(K):<12} | {'MRR@' + str(K):<10} | {'nDCG@' + str(K):<10} | {'Latency (s/q)':<12}")
 print("-" * 80)
-print(f"{'1. Raw BM25 (Top ' + str(K) + ')':<35} | {raw_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(raw_rr):<10.4f} | {np.mean(raw_ndcg):<10.4f}")
-print(f"{'2. Hybrid BM25 (Top ' + str(K) + ')':<35} | {hybrid_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(hybrid_rr):<10.4f} | {np.mean(hybrid_ndcg):<10.4f}")
-print(f"{'3. Hybrid BM25 (Top 100) + Reranker':<35} | {reranked_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(reranked_rr):<10.4f} | {np.mean(reranked_ndcg):<10.4f}")
+print(f"{'1. Raw BM25 (Top ' + str(K) + ')':<35} | {raw_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(raw_rr):<10.4f} | {np.mean(raw_ndcg):<10.4f} | {avg_raw_time:<12.4f}")
+print(f"{'2. Hybrid BM25 (Top ' + str(K) + ')':<35} | {hybrid_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(hybrid_rr):<10.4f} | {np.mean(hybrid_ndcg):<10.4f} | {avg_hybrid_time:<12.4f}")
+print(f"{'3. Hybrid BM25 (Top 100) + Reranker':<35} | {reranked_hits/ACTUAL_EVAL_QUERIES:<12.2%} | {np.mean(reranked_rr):<10.4f} | {np.mean(reranked_ndcg):<10.4f} | {avg_reranked_time:<12.4f}")
 
 # Saving Results
 file_exists = os.path.isfile(CSV_FILE)
 with open(CSV_FILE, mode='a', newline='') as file:
     writer = csv.writer(file)
     if not file_exists:
-        writer.writerow(["Dataset", "Method", "Success@10", "MRR@10", "nDCG@10"])
-    writer.writerow([dataset.upper(), f"Raw BM25", raw_hits/ACTUAL_EVAL_QUERIES, np.mean(raw_rr), np.mean(raw_ndcg)])
-    writer.writerow([dataset.upper(), f"Hybrid BM25", hybrid_hits/ACTUAL_EVAL_QUERIES, np.mean(hybrid_rr), np.mean(hybrid_ndcg)])
-    writer.writerow([dataset.upper(), f"Hybrid + Reranker", reranked_hits/ACTUAL_EVAL_QUERIES, np.mean(reranked_rr), np.mean(reranked_ndcg)])
+        writer.writerow(["Dataset", "Method", "Success@10", "MRR@10", "nDCG@10", "Latency(s)"])
+    writer.writerow([dataset.upper(), f"Raw BM25", raw_hits/ACTUAL_EVAL_QUERIES, np.mean(raw_rr), np.mean(raw_ndcg), avg_raw_time])
+    writer.writerow([dataset.upper(), f"Hybrid BM25", hybrid_hits/ACTUAL_EVAL_QUERIES, np.mean(hybrid_rr), np.mean(hybrid_ndcg), avg_hybrid_time])
+    writer.writerow([dataset.upper(), f"Hybrid + Reranker", reranked_hits/ACTUAL_EVAL_QUERIES, np.mean(reranked_rr), np.mean(reranked_ndcg), avg_reranked_time])
 print(f"\nResults appended to {CSV_FILE}")

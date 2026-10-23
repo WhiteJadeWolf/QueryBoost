@@ -14,7 +14,9 @@ K = 10
 NUM_EVAL_QUERIES = 100
 DATASETS = ["scifact", "trec-covid", "fiqa"]
 dataset = DATASETS[0]
-CSV_FILE = 'query_exp_benchmark_results.csv'
+RESULTS_DIR = 'results'
+os.makedirs(RESULTS_DIR, exist_ok=True)
+CSV_FILE = os.path.join(RESULTS_DIR, 'query_exp_benchmark_results.csv')
 
 print(f"Loading {dataset} dataset...")
 url = f"https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{dataset}.zip"

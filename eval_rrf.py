@@ -14,7 +14,9 @@ RRF_K = 60 # Standard smoothing constant for RRF (Reciprocal Rank Fusion)
 DENSE_MODEL = 'all-MiniLM-L6-v2'
 DATASETS = ['scifact', 'trec-covid', 'fiqa']
 dataset = DATASETS[2]
-CSV_FILE = 'baseline_rrf_benchmark_results.csv'
+RESULTS_DIR = 'results'
+os.makedirs(RESULTS_DIR, exist_ok=True)
+CSV_FILE = os.path.join(RESULTS_DIR, 'baseline_rrf_benchmark_results.csv')
 
 print(f"Loading {dataset} dataset...")
 url = f"https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{dataset}.zip"
